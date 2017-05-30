@@ -39,3 +39,5 @@ Thumbs.db
 
 # VIM
 *.swp
+/packages
+/.vs
