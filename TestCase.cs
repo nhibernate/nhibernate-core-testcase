@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Data;
 using System.Reflection;
 using log4net;
@@ -11,383 +12,471 @@ using NHibernate.Mapping;
 using NHibernate.Tool.hbm2ddl;
 using NHibernate.Type;
 using NUnit.Framework;
-using NHibernate.Hql.Classic;
-using NHibernate.Hql.Ast.ANTLR;
+using NUnit.Framework.Interfaces;
+using System.Text;
+using NHibernate.Dialect;
+using NHibernate.Driver;
 
 namespace NHibernate.Test
 {
-    public abstract class TestCase
-    {
-        private const bool OutputDdl = false;
-        protected Configuration cfg;
-        protected ISessionFactoryImplementor sessions;
+	public abstract class TestCase
+	{
+		private const bool OutputDdl = false;
+		protected Configuration cfg;
+		private DebugSessionFactory _sessionFactory;
+		private SchemaExport _schemaExport;
 
-        private static readonly ILog log = LogManager.GetLogger(typeof(TestCase));
+		private static readonly ILog log = LogManager.GetLogger(typeof(TestCase));
 
-        protected Dialect.Dialect Dialect
-        {
-            get { return NHibernate.Dialect.Dialect.GetDialect(cfg.Properties); }
-        }
+		protected Dialect.Dialect Dialect
+		{
+			get { return NHibernate.Dialect.Dialect.GetDialect(cfg.Properties); }
+		}
 
-        protected TestDialect TestDialect
-        {
-            get { return TestDialect.GetTestDialect(Dialect); }
-        }
+		protected TestDialect TestDialect
+		{
+			get { return TestDialect.GetTestDialect(Dialect); }
+		}
 
-        /// <summary>
-        /// To use in in-line test
-        /// </summary>
-        protected bool IsClassicParser
-        {
-            get
-            {
-                return sessions.Settings.QueryTranslatorFactory is ClassicQueryTranslatorFactory;
-            }
-        }
+		/// <summary>
+		/// Mapping files used in the TestCase
+		/// </summary>
+		protected abstract string[] Mappings { get; }
 
-        /// <summary>
-        /// To use in in-line test
-        /// </summary>
-        protected bool IsAntlrParser
-        {
-            get
-            {
-                return sessions.Settings.QueryTranslatorFactory is ASTQueryTranslatorFactory;
-            }
-        }
+		/// <summary>
+		/// Assembly to load mapping files from (default is NHibernate.DomainModel).
+		/// </summary>
+		protected virtual string MappingsAssembly
+		{
+			get { return "NHibernate.DomainModel"; }
+		}
 
-        protected ISession lastOpenedSession;
-        private DebugConnectionProvider connectionProvider;
+		protected SchemaExport SchemaExport => _schemaExport ?? (_schemaExport = new SchemaExport(cfg));
 
-        /// <summary>
-        /// Mapping files used in the TestCase
-        /// </summary>
-        protected abstract IList Mappings { get; }
+		static TestCase()
+		{
+			// Configure log4net here since configuration through an attribute doesn't always work.
+			XmlConfigurator.Configure(LogManager.GetRepository(typeof(TestCase).Assembly));
+		}
 
-        /// <summary>
-        /// Assembly to load mapping files from (default is NHibernate.DomainModel).
-        /// </summary>
-        protected virtual string MappingsAssembly
-        {
-            get { return "NHibernate.DomainModel"; }
-        }
+		/// <summary>
+		/// Creates the tables used in this TestCase
+		/// </summary>
+		[OneTimeSetUp]
+		public void TestFixtureSetUp()
+		{
+			try
+			{
+				Configure();
+				if (!AppliesTo(Dialect))
+				{
+					Assert.Ignore(GetType() + " does not apply to " + Dialect);
+				}
 
-        static TestCase()
-        {
-            // Configure log4net here since configuration through an attribute doesn't always work.
-            XmlConfigurator.Configure();
-        }
+				_sessionFactory = BuildSessionFactory();
+				if (!AppliesTo(_sessionFactory))
+				{
+					Assert.Ignore(GetType() + " does not apply with the current session-factory configuration");
+				}
+				CreateSchema();
+			}
+			catch (Exception e)
+			{
+				Cleanup();
+				log.Error("Error while setting up the test fixture", e);
+				throw;
+			}
+		}
 
-        /// <summary>
-        /// Creates the tables used in this TestCase
-        /// </summary>
-        [TestFixtureSetUp]
-        public void TestFixtureSetUp()
-        {
-            try
-            {
-                Configure();
-                if (!AppliesTo(Dialect))
-                {
-                    Assert.Ignore(GetType() + " does not apply to " + Dialect);
-                }
+		protected void RebuildSessionFactory()
+		{
+			Sfi?.Close();
+			_sessionFactory = BuildSessionFactory();
+		}
 
-                CreateSchema();
-                try
-                {
-                    BuildSessionFactory();
-                    if (!AppliesTo(sessions))
-                    {
-                        Assert.Ignore(GetType() + " does not apply with the current session-factory configuration");
-                    }
-                }
-                catch
-                {
-                    DropSchema();
-                    throw;
-                }
-            }
-            catch (Exception e)
-            {
-                Cleanup();
-                log.Error("Error while setting up the test fixture", e);
-                throw;
-            }
-        }
+		/// <summary>
+		/// Removes the tables used in this TestCase.
+		/// </summary>
+		/// <remarks>
+		/// If the tables are not cleaned up sometimes SchemaExport runs into
+		/// Sql errors because it can't drop tables because of the FKs.  This 
+		/// will occur if the TestCase does not have the same hbm.xml files
+		/// included as a previous one.
+		/// </remarks>
+		[OneTimeTearDown]
+		public void TestFixtureTearDown()
+		{
+			// If TestFixtureSetup fails due to an IgnoreException, it will still run the teardown.
+			// We don't want to try to clean up again since the setup would have already done so.
+			// If cfg is null already, that indicates it's already been cleaned up and we needn't.
+			if (cfg != null)
+			{
+				if (!AppliesTo(Dialect))
+					return;
 
-        /// <summary>
-        /// Removes the tables used in this TestCase.
-        /// </summary>
-        /// <remarks>
-        /// If the tables are not cleaned up sometimes SchemaExport runs into
-        /// Sql errors because it can't drop tables because of the FKs.  This 
-        /// will occur if the TestCase does not have the same hbm.xml files
-        /// included as a previous one.
-        /// </remarks>
-        [TestFixtureTearDown]
-        public void TestFixtureTearDown()
-        {
-            if (!AppliesTo(Dialect))
-                return;
+				if (AppliesTo(_sessionFactory))
+					DropSchema();
+				Cleanup();
+			}
+		}
 
-            DropSchema();
-            Cleanup();
-        }
+		protected virtual void OnSetUp()
+		{
+		}
 
-        protected virtual void OnSetUp()
-        {
-        }
+		/// <summary>
+		/// Set up the test. This method is not overridable, but it calls
+		/// <see cref="OnSetUp" /> which is.
+		/// </summary>
+		[SetUp]
+		public void SetUp()
+		{
+			OnSetUp();
+		}
 
-        /// <summary>
-        /// Set up the test. This method is not overridable, but it calls
-        /// <see cref="OnSetUp" /> which is.
-        /// </summary>
-        [SetUp]
-        public void SetUp()
-        {
-            OnSetUp();
-        }
+		protected virtual void OnTearDown()
+		{
+		}
 
-        protected virtual void OnTearDown()
-        {
-        }
+		/// <summary>
+		/// Checks that the test case cleans up after itself. This method
+		/// is not overridable, but it calls <see cref="OnTearDown" /> which is.
+		/// </summary>
+		[TearDown]
+		public void TearDown()
+		{
+			var testResult = TestContext.CurrentContext.Result;
+			var fail = false;
+			var testOwnTearDownDone = false;
+			string badCleanupMessage = null;
+			try
+			{
+				try
+				{
+					OnTearDown();
+					testOwnTearDownDone = true;
+				}
+				finally
+				{
+					try
+					{
+						var wereClosed = _sessionFactory.CheckSessionsWereClosed();
+						var wasCleaned = CheckDatabaseWasCleaned();
+						var wereConnectionsClosed = CheckConnectionsWereClosed();
+						fail = !wereClosed || !wasCleaned || !wereConnectionsClosed;
 
-        /// <summary>
-        /// Checks that the test case cleans up after itself. This method
-        /// is not overridable, but it calls <see cref="OnTearDown" /> which is.
-        /// </summary>
-        [TearDown]
-        public void TearDown()
-        {
-            OnTearDown();
+						if (fail)
+						{
+							badCleanupMessage = "Test didn't clean up after itself. session closed: " + wereClosed + "; database cleaned: " +
+												wasCleaned
+												+ "; connection closed: " + wereConnectionsClosed;
+							if (testResult != null && testResult.Outcome.Status == TestStatus.Failed)
+							{
+								// Avoid hiding a test failure (asserts are usually not hidden, but other exception would be).
+								badCleanupMessage = GetCombinedFailureMessage(testResult, badCleanupMessage, null);
+							}
+						}
+					}
+					catch (Exception ex)
+					{
+						if (testOwnTearDownDone)
+							throw;
 
-            bool wasClosed = CheckSessionWasClosed();
-            bool wasCleaned = CheckDatabaseWasCleaned();
-            bool wereConnectionsClosed = CheckConnectionsWereClosed();
-            bool fail = !wasClosed || !wasCleaned || !wereConnectionsClosed;
+						// Do not hide the test own teardown failure.
+						log.Error("TearDown cleanup failure, while test own teardown has failed. Logging cleanup failure", ex);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				if (testResult == null || testResult.Outcome.Status != TestStatus.Failed)
+					throw;
 
-            if (fail)
-            {
-                Assert.Fail("Test didn't clean up after itself. session closed: " + wasClosed + " database cleaned: " + wasCleaned
-                    + " connection closed: " + wereConnectionsClosed);
-            }
-        }
+				// Avoid hiding a test failure (asserts are usually not hidden, but other exceptions would be).
+				var exType = ex.GetType();
+				Assert.Fail(GetCombinedFailureMessage(testResult,
+					exType.Namespace + "." + exType.Name + " " + ex.Message,
+					ex.StackTrace));
+			}
 
-        private bool CheckSessionWasClosed()
-        {
-            if (lastOpenedSession != null && lastOpenedSession.IsOpen)
-            {
-                log.Error("Test case didn't close a session, closing");
-                lastOpenedSession.Close();
-                return false;
-            }
+			if (fail)
+			{
+				Assert.Fail(badCleanupMessage);
+			}
+		}
 
-            return true;
-        }
+		private string GetCombinedFailureMessage(TestContext.ResultAdapter result, string tearDownFailure, string tearDownStackTrace)
+		{
+			var message = new StringBuilder()
+				.Append("The test failed and then failed to cleanup. Test failure is: ")
+				.AppendLine(result.Message)
+				.Append("Tear-down failure is: ")
+				.AppendLine(tearDownFailure)
+				.AppendLine("Test failure stack trace is: ")
+				.AppendLine(result.StackTrace);
 
-        private bool CheckDatabaseWasCleaned()
-        {
-            if (sessions.GetAllClassMetadata().Count == 0)
-            {
-                // Return early in the case of no mappings, also avoiding
-                // a warning when executing the HQL below.
-                return true;
-            }
+			if (!string.IsNullOrEmpty(tearDownStackTrace))
+				message.AppendLine("Tear-down failure stack trace is:")
+					.Append(tearDownStackTrace);
 
-            bool empty;
-            using (ISession s = sessions.OpenSession())
-            {
-                IList objects = s.CreateQuery("from System.Object o").List();
-                empty = objects.Count == 0;
-            }
+			return message.ToString();
+		}
 
-            if (!empty)
-            {
-                log.Error("Test case didn't clean up the database after itself, re-creating the schema");
-                DropSchema();
-                CreateSchema();
-            }
+		protected virtual bool CheckDatabaseWasCleaned()
+		{
+			if (Sfi.GetAllClassMetadata().Count == 0)
+			{
+				// Return early in the case of no mappings, also avoiding
+				// a warning when executing the HQL below.
+				return true;
+			}
 
-            return empty;
-        }
+			bool empty;
+			using (ISession s = Sfi.OpenSession())
+			{
+				IList objects = s.CreateQuery("from System.Object o").List();
+				empty = objects.Count == 0;
+			}
 
-        private bool CheckConnectionsWereClosed()
-        {
-            if (connectionProvider == null || !connectionProvider.HasOpenConnections)
-            {
-                return true;
-            }
+			if (!empty)
+			{
+				log.Error("Test case didn't clean up the database after itself, re-creating the schema");
+				DropSchema();
+				CreateSchema();
+			}
 
-            log.Error("Test case didn't close all open connections, closing");
-            connectionProvider.CloseAllConnections();
-            return false;
-        }
+			return empty;
+		}
 
-        private void Configure()
-        {
-            cfg = new Configuration();
-            if (TestConfigurationHelper.hibernateConfigFile != null)
-                cfg.Configure(TestConfigurationHelper.hibernateConfigFile);
+		private bool CheckConnectionsWereClosed()
+		{
+			if (_sessionFactory?.DebugConnectionProvider?.HasOpenConnections != true)
+			{
+				return true;
+			}
 
-            AddMappings(cfg);
+			log.Error("Test case didn't close all open connections, closing");
+			_sessionFactory.DebugConnectionProvider.CloseAllConnections();
+			return false;
+		}
 
-            Configure(cfg);
+		/// <summary>
+		/// (Re)Create the configuration.
+		/// </summary>
+		protected void Configure()
+		{
+			cfg = TestConfigurationHelper.GetDefaultConfiguration();
 
-            ApplyCacheSettings(cfg);
-        }
+			AddMappings(cfg);
 
-        protected virtual void AddMappings(Configuration configuration)
-        {
-            Assembly assembly = Assembly.Load(MappingsAssembly);
+			Configure(cfg);
 
-            foreach (string file in Mappings)
-            {
-                configuration.AddResource(MappingsAssembly + "." + file, assembly);
-            }
-        }
+			ApplyCacheSettings(cfg);
+		}
 
-        protected virtual void CreateSchema()
-        {
-            new SchemaExport(cfg).Create(OutputDdl, true);
-        }
+		protected virtual void AddMappings(Configuration configuration)
+		{
+			Assembly assembly = Assembly.Load(MappingsAssembly);
 
-        private void DropSchema()
-        {
-            new SchemaExport(cfg).Drop(OutputDdl, true);
-        }
+			foreach (string file in Mappings)
+			{
+				configuration.AddResource(MappingsAssembly + "." + file, assembly);
+			}
+		}
 
-        protected virtual void BuildSessionFactory()
-        {
-            sessions = (ISessionFactoryImplementor)cfg.BuildSessionFactory();
-            connectionProvider = sessions.ConnectionProvider as DebugConnectionProvider;
-        }
+		protected virtual void CreateSchema()
+		{
+			SchemaExport.Create(OutputDdl, true);
+		}
 
-        private void Cleanup()
-        {
-            if (sessions != null)
-            {
-                sessions.Close();
-            }
-            sessions = null;
-            connectionProvider = null;
-            lastOpenedSession = null;
-            cfg = null;
-        }
+		protected virtual void DropSchema()
+		{
+			DropSchema(OutputDdl, SchemaExport, Sfi);
+		}
 
-        public int ExecuteStatement(string sql)
-        {
-            if (cfg == null)
-            {
-                cfg = new Configuration();
-            }
+		public static void DropSchema(bool useStdOut, SchemaExport export, ISessionFactoryImplementor sfi)
+		{
+			if (sfi?.ConnectionProvider.Driver is FirebirdClientDriver fbDriver)
+			{
+				// Firebird will pool each connection created during the test and will marked as used any table
+				// referenced by queries. It will at best delays those tables drop until connections are actually
+				// closed, or immediately fail dropping them.
+				// This results in other tests failing when they try to create tables with same name.
+				// By clearing the connection pool the tables will get dropped. This is done by the following code.
+				// Moved from NH1908 test case, contributed by Amro El-Fakharany.
+				fbDriver.ClearPool(null);
+			}
 
-            using (IConnectionProvider prov = ConnectionProviderFactory.NewConnectionProvider(cfg.Properties))
-            {
-                IDbConnection conn = prov.GetConnection();
+			export.Drop(useStdOut, true);
+		}
 
-                try
-                {
-                    using (IDbTransaction tran = conn.BeginTransaction())
-                    using (IDbCommand comm = conn.CreateCommand())
-                    {
-                        comm.CommandText = sql;
-                        comm.Transaction = tran;
-                        comm.CommandType = CommandType.Text;
-                        int result = comm.ExecuteNonQuery();
-                        tran.Commit();
-                        return result;
-                    }
-                }
-                finally
-                {
-                    prov.CloseConnection(conn);
-                }
-            }
-        }
+		protected virtual DebugSessionFactory BuildSessionFactory()
+		{
+			return new DebugSessionFactory(cfg.BuildSessionFactory());
+		}
 
-        public int ExecuteStatement(ISession session, ITransaction transaction, string sql)
-        {
-            using (IDbCommand cmd = session.Connection.CreateCommand())
-            {
-                cmd.CommandText = sql;
-                if (transaction != null)
-                    transaction.Enlist(cmd);
-                return cmd.ExecuteNonQuery();
-            }
-        }
+		private void Cleanup()
+		{
+			Sfi?.Close();
+			_sessionFactory = null;
+			cfg = null;
+			_schemaExport = null;
+		}
 
-        protected ISessionFactoryImplementor Sfi
-        {
-            get { return sessions; }
-        }
+		public int ExecuteStatement(string sql)
+		{
+			if (cfg == null)
+			{
+				cfg = TestConfigurationHelper.GetDefaultConfiguration();
+			}
 
-        protected virtual ISession OpenSession()
-        {
-            lastOpenedSession = sessions.OpenSession();
-            return lastOpenedSession;
-        }
+			using (IConnectionProvider prov = ConnectionProviderFactory.NewConnectionProvider(cfg.Properties))
+			{
+				var conn = prov.GetConnection();
 
-        protected virtual ISession OpenSession(IInterceptor sessionLocalInterceptor)
-        {
-            lastOpenedSession = sessions.OpenSession(sessionLocalInterceptor);
-            return lastOpenedSession;
-        }
+				try
+				{
+					using (var tran = conn.BeginTransaction())
+					using (var comm = conn.CreateCommand())
+					{
+						comm.CommandText = sql;
+						comm.Transaction = tran;
+						comm.CommandType = CommandType.Text;
+						int result = comm.ExecuteNonQuery();
+						tran.Commit();
+						return result;
+					}
+				}
+				finally
+				{
+					prov.CloseConnection(conn);
+				}
+			}
+		}
 
-        protected void ApplyCacheSettings(Configuration configuration)
-        {
-            if (CacheConcurrencyStrategy == null)
-            {
-                return;
-            }
+		public int ExecuteStatement(ISession session, ITransaction transaction, string sql)
+		{
+			using (var cmd = session.Connection.CreateCommand())
+			{
+				cmd.CommandText = sql;
+				if (transaction != null)
+					transaction.Enlist(cmd);
+				return cmd.ExecuteNonQuery();
+			}
+		}
 
-            foreach (PersistentClass clazz in configuration.ClassMappings)
-            {
-                bool hasLob = false;
-                foreach (Property prop in clazz.PropertyClosureIterator)
-                {
-                    if (prop.Value.IsSimpleValue)
-                    {
-                        IType type = ((SimpleValue)prop.Value).Type;
-                        if (type == NHibernateUtil.BinaryBlob)
-                        {
-                            hasLob = true;
-                        }
-                    }
-                }
-                if (!hasLob && !clazz.IsInherited)
-                {
-                    configuration.SetCacheConcurrencyStrategy(clazz.EntityName, CacheConcurrencyStrategy);
-                }
-            }
+		protected ISessionFactoryImplementor Sfi => _sessionFactory;
 
-            foreach (Mapping.Collection coll in configuration.CollectionMappings)
-            {
-                configuration.SetCollectionCacheConcurrencyStrategy(coll.Role, CacheConcurrencyStrategy);
-            }
-        }
+		protected virtual ISession OpenSession()
+		{
+			return Sfi.OpenSession();
+		}
 
-        #region Properties overridable by subclasses
+		protected virtual ISession OpenSession(IInterceptor sessionLocalInterceptor)
+		{
+			return Sfi.WithOptions().Interceptor(sessionLocalInterceptor).OpenSession();
+		}
 
-        protected virtual bool AppliesTo(Dialect.Dialect dialect)
-        {
-            return true;
-        }
+		protected virtual void ApplyCacheSettings(Configuration configuration)
+		{
+			if (CacheConcurrencyStrategy == null)
+			{
+				return;
+			}
 
-        protected virtual bool AppliesTo(ISessionFactoryImplementor factory)
-        {
-            return true;
-        }
+			foreach (PersistentClass clazz in configuration.ClassMappings)
+			{
+				bool hasLob = false;
+				foreach (Property prop in clazz.PropertyClosureIterator)
+				{
+					if (prop.Value.IsSimpleValue)
+					{
+						IType type = ((SimpleValue)prop.Value).Type;
+						if (ReferenceEquals(type, NHibernateUtil.BinaryBlob))
+						{
+							hasLob = true;
+						}
+					}
+				}
+				if (!hasLob && !clazz.IsInherited)
+				{
+					configuration.SetCacheConcurrencyStrategy(clazz.EntityName, CacheConcurrencyStrategy);
+				}
+			}
 
-        protected virtual void Configure(Configuration configuration)
-        {
-        }
+			foreach (Mapping.Collection coll in configuration.CollectionMappings)
+			{
+				configuration.SetCollectionCacheConcurrencyStrategy(coll.Role, CacheConcurrencyStrategy);
+			}
+		}
 
-        protected virtual string CacheConcurrencyStrategy
-        {
-            get { return "nonstrict-read-write"; }
-            //get { return null; }
-        }
+		#region Properties overridable by subclasses
 
-        #endregion
-    }
+		protected virtual bool AppliesTo(Dialect.Dialect dialect)
+		{
+			return true;
+		}
+
+		protected virtual bool AppliesTo(ISessionFactoryImplementor factory)
+		{
+			return true;
+		}
+
+		protected virtual void Configure(Configuration configuration)
+		{
+		}
+
+		protected virtual string CacheConcurrencyStrategy
+		{
+			get { return "nonstrict-read-write"; }
+			//get { return null; }
+		}
+
+		#endregion
+
+		#region Utilities
+
+		protected DateTime RoundForDialect(DateTime value)
+		{
+			return AbstractDateTimeType.Round(value, Dialect.TimestampResolutionInTicks);
+		}
+
+		private static readonly Dictionary<string, HashSet<System.Type>> DialectsNotSupportingStandardFunction =
+			new Dictionary<string, HashSet<System.Type>>
+			{
+				{"locate", new HashSet<System.Type> {typeof (SQLiteDialect)}},
+				{"bit_length", new HashSet<System.Type> {typeof (SQLiteDialect)}},
+				{"extract", new HashSet<System.Type> {typeof (SQLiteDialect)}},
+				{
+					"nullif",
+					new HashSet<System.Type>
+					{
+						// Actually not supported by the db engine. (Well, could likely still be done with a case when override.)
+						typeof (MsSqlCeDialect),
+						typeof (MsSqlCe40Dialect)
+					}}
+			};
+
+		protected void AssumeFunctionSupported(string functionName)
+		{
+			// We could test Sfi.SQLFunctionRegistry.HasFunction(functionName) which has the advantage of
+			// accounting for additionnal functions added in configuration. But Dialect is normally never
+			// null, while Sfi could be not yet initialized, depending from where this function is called.
+			// Furtermore there are currently no additionnal functions added in configuration for NHibernate
+			// tests.
+			Assume.That(
+				Dialect.Functions,
+				Does.ContainKey(functionName),
+				$"{Dialect} doesn't support {functionName} function.");
+
+			if (!DialectsNotSupportingStandardFunction.TryGetValue(functionName, out var dialects))
+				return;
+			Assume.That(
+				dialects,
+				Does.Not.Contain(Dialect.GetType()),
+				$"{Dialect} doesn't support {functionName} standard function.");
+		}
+
+		#endregion
+	}
 }

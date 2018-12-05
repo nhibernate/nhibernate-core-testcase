@@ -1,10 +1,9 @@
 ﻿using System.Linq;
 using NHibernate.Cfg.MappingSchema;
-using NHibernate.Linq;
 using NHibernate.Mapping.ByCode;
 using NUnit.Framework;
 
-namespace NHibernate.Test.NHSpecificTest.NH0000
+namespace NHibernate.Test.NHSpecificTest.GH0000
 {
 	/// <summary>
 	/// Fixture using 'by code' mappings
@@ -14,7 +13,8 @@ namespace NHibernate.Test.NHSpecificTest.NH0000
 	/// by code in the GetMappings method, and does not require the <c>Mappings.hbm.xml</c> file. Use this approach
 	/// if you prefer.
 	/// </remarks>
-	public class FixtureByCode : TestCaseMappingByCode
+	[TestFixture]
+	public class ByCodeFixture : TestCaseMappingByCode
 	{
 		protected override HbmMapping GetMappings()
 		{
@@ -39,7 +39,6 @@ namespace NHibernate.Test.NHSpecificTest.NH0000
 				var e2 = new Entity { Name = "Sally" };
 				session.Save(e2);
 
-				session.Flush();
 				transaction.Commit();
 			}
 		}
@@ -49,9 +48,13 @@ namespace NHibernate.Test.NHSpecificTest.NH0000
 			using (var session = OpenSession())
 			using (var transaction = session.BeginTransaction())
 			{
-				session.Delete("from System.Object");
+				// The HQL delete does all the job inside the database without loading the entities, but it does
+				// not handle delete order for avoiding violating constraints if any. Use
+				// session.Delete("from System.Object");
+				// instead if in need of having NHbernate ordering the deletes, but this will cause
+				// loading the entities in the session.
+				session.CreateQuery("delete from System.Object").ExecuteUpdate();
 
-				session.Flush();
 				transaction.Commit();
 			}
 		}
@@ -60,13 +63,14 @@ namespace NHibernate.Test.NHSpecificTest.NH0000
 		public void YourTestName()
 		{
 			using (var session = OpenSession())
-			using (session.BeginTransaction())
+			using (var transaction = session.BeginTransaction())
 			{
-			    var entities = (from e in session.Query<Entity>()
-			                    where e.Name == "Bob"
-			                    select e).ToList();
+				var result = from e in session.Query<Entity>()
+							 where e.Name == "Bob"
+							 select e;
 
-			    Assert.AreEqual(1, entities.Count);
+				Assert.That(result.ToList(), Has.Count.EqualTo(1));
+				transaction.Commit();
 			}
 		}
 	}

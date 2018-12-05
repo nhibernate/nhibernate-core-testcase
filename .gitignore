@@ -41,3 +41,8 @@ Thumbs.db
 *.swp
 /packages
 /.vs
+
+.vscode
+.DS_Store
+
+.idea/
