@@ -9,7 +9,7 @@ for your own use before compile tests in VisualStudio.
     <!-- This is the System.Data.dll provider for MSSQL Server -->
     <property name="dialect">NHibernate.Dialect.MsSql2008Dialect</property>
     <property name="connection.driver_class">NHibernate.Driver.Sql2008ClientDriver</property> <!-- Shouldn't be necessary, but is required by some tests -->
-    <property name="connection.connection_string">Server=.;Database=nhibernate;Integrated Security=SSPI</property>
+    <property name="connection.connection_string">Server=localhost\sqlexpress;Database=nhibernate;Integrated Security=SSPI</property>
 
     <property name="connection.provider">NHibernate.Test.DebugConnectionProvider, NHibernate.Test</property>
     <property name="connection.isolation">ReadCommitted</property> <!-- See System.Data.IsolationLevel for valid values -->
