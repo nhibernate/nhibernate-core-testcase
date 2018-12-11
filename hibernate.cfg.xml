@@ -4,20 +4,29 @@ This template was written to work with NHibernate.Test.
 Copy the template to your NHibernate.Test project folder and rename it in hibernate.cfg.xml and change it 
 for your own use before compile tests in VisualStudio.
 -->
-<!-- This is the System.Data.OracleClient.dll provider for Oracle from MS -->
-<hibernate-configuration  xmlns="urn:nhibernate-configuration-2.2" >
-	<session-factory name="NHibernate.Test">
-		<property name="connection.driver_class">NHibernate.Driver.SqlClientDriver</property>
-		<property name="connection.connection_string">
-			Data Source=localhost\SQLEXPRESS;Initial Catalog=NHTEST;Integrated Security=True;Pooling=False
-		</property>
-		<property name="adonet.batch_size">10</property>
-		<property name="show_sql">false</property>
-		<property name="dialect">NHibernate.Dialect.MsSql2008Dialect</property>
-		<property name="command_timeout">10</property>
-		<property name="query.substitutions">true 1, false 0, yes 'Y', no 'N'</property>
-		<!--<property name="query.factory_class">
-			NHibernate.Hql.Classic.ClassicQueryTranslatorFactory, NHibernate
-		</property>-->
-	</session-factory>
+<hibernate-configuration xmlns="urn:nhibernate-configuration-2.2">
+  <session-factory name="NHibernate.Test">
+    <!-- This is the System.Data.dll provider for MSSQL Server -->
+    <property name="dialect">NHibernate.Dialect.MsSql2008Dialect</property>
+    <property name="connection.driver_class">NHibernate.Driver.Sql2008ClientDriver</property> <!-- Shouldn't be necessary, but is required by some tests -->
+    <property name="connection.connection_string">Server=localhost\sqlexpress;Database=nhibernate;Integrated Security=SSPI</property>
+
+    <property name="connection.provider">NHibernate.Test.DebugConnectionProvider, NHibernate.Test</property>
+    <property name="connection.isolation">ReadCommitted</property> <!-- See System.Data.IsolationLevel for valid values -->
+
+    <property name="cache.provider_class">NHibernate.Cache.HashtableCacheProvider, NHibernate</property>
+    <property name="cache.use_query_cache">true</property>
+
+    <property name="query.startup_check">false</property>
+    <property name="query.substitutions">true 1, false 0, yes 'Y', no 'N'</property>
+
+    <property name="adonet.batch_size">10</property>
+    <property name="adonet.wrap_result_sets">false</property>
+
+    <property name="hbm2ddl.keywords">none</property>
+    <property name="format_sql">true</property>
+    <property name="show_sql">false</property>
+    <property name="command_timeout">444</property>
+
+  </session-factory>
 </hibernate-configuration>

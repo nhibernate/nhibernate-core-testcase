@@ -1,8 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Data;
-using System.Linq;
-using System.Text;
+using NHibernate.Id;
 using NHibernate.SqlTypes;
 
 namespace NHibernate.Test
@@ -16,56 +13,159 @@ namespace NHibernate.Test
 	{
 		public static TestDialect GetTestDialect(Dialect.Dialect dialect)
 		{
-			string testDialectTypeName = "NHibernate.Test.TestDialects." + dialect.GetType().Name.Replace("Dialect", "TestDialect");
-			System.Type testDialectType = System.Type.GetType(testDialectTypeName);
+			var testDialectTypeName = "NHibernate.Test.TestDialects." + dialect.GetType().Name.Replace("Dialect", "TestDialect");
+			var testDialectType = System.Type.GetType(testDialectTypeName);
 			if (testDialectType != null)
-				return (TestDialect)Activator.CreateInstance(testDialectType, dialect);
+				return (TestDialect) Activator.CreateInstance(testDialectType, dialect);
 			return new TestDialect(dialect);
 		}
 
-	    private Dialect.Dialect dialect;
+		readonly Dialect.Dialect _dialect;
 
-        public TestDialect(Dialect.Dialect dialect)
-        {
-            this.dialect = dialect;
-        }
-
-		public virtual bool SupportsOperatorAll { get { return true; } }
-		public virtual bool SupportsOperatorSome { get { return true; } }
-		public virtual bool SupportsLocate { get { return true; } }
-
-		public virtual bool SupportsDistributedTransactions { get { return true; } }
+		public TestDialect(Dialect.Dialect dialect)
+		{
+			_dialect = dialect;
+		}
 
 		/// <summary>
-		/// Whether two transactions can be run at the same time.  For example, with SQLite
-		/// the database is locked when one transaction is run, so running a second transaction
-		/// will cause a "database is locked" error message.
+		/// Has a native generator strategy resolving to identity.
 		/// </summary>
-		public virtual bool SupportsConcurrentTransactions { get { return true; } }
+		public bool HasIdentityNativeGenerator
+			=> _dialect.NativeIdentifierGeneratorClass == typeof(IdentityGenerator);
 
-		public virtual bool SupportsFullJoin { get { return true; } }
+		public virtual bool SupportsOperatorAll => true;
+		public virtual bool SupportsOperatorSome => true;
+		public virtual bool SupportsLocate => true;
 
-        public virtual bool HasBrokenDecimalType { get { return false; } }
+		public virtual bool SupportsFullJoin => true;
 
-        public virtual bool SupportsNullCharactersInUtfStrings { get { return true; } }
+		/// <summary>
+		/// Does the dialect lack a true handling of decimal?
+		/// </summary>
+		public virtual bool HasBrokenDecimalType => false;
 
-        public virtual bool SupportsSelectForUpdateOnOuterJoin { get { return true; } }
+		public virtual bool SupportsNullCharactersInUtfStrings => true;
 
-        public virtual bool SupportsHavingWithoutGroupBy { get { return true; } }
+		/// <summary>
+		/// Some databases do not support SELECT FOR UPDATE 
+		/// </summary>
+		public virtual bool SupportsSelectForUpdate => true;
+		
+		/// <summary>
+		/// Some databases do not support SELECT FOR UPDATE with paging
+		/// </summary>
+		public virtual bool SupportsSelectForUpdateWithPaging => SupportsSelectForUpdate;
 
-        public virtual bool IgnoresTrailingWhitespace { get { return false; } }
+		/// <summary>
+		///  Some databases do not support SELECT FOR UPDATE in conjunction with outer joins 
+		/// </summary>
+		public virtual bool SupportsSelectForUpdateOnOuterJoin => SupportsSelectForUpdate;
 
-	    public bool SupportsSqlType(SqlType sqlType)
-	    {
-            try
-            {
-                dialect.GetTypeName(sqlType);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-	    }
+		public virtual bool SupportsHavingWithoutGroupBy => true;
+
+		public virtual bool SupportsComplexExpressionInGroupBy => true;
+
+		public virtual bool SupportsCountDistinct => true;
+
+		public virtual bool SupportsOrderByAggregate => true;
+
+		public virtual bool SupportsOrderByColumnNumber => true;
+
+		public virtual bool SupportsDuplicatedColumnAliases => true;
+
+		/// <summary>
+		/// Supports inserting in a table without any column specified in the insert.
+		/// </summary>
+		public virtual bool SupportsEmptyInserts => true;
+
+		/// <summary>
+		/// Either supports inserting in a table without any column specified in the insert, or has a native
+		/// generator strategy resolving to something else than identity.
+		/// </summary>
+		/// <remarks>This property is useful for cases where empty inserts happens only when the entities
+		/// generator is <c>native</c> while the dialect uses <c>identity</c> for this generator.</remarks>
+		public bool SupportsEmptyInsertsOrHasNonIdentityNativeGenerator
+			=> SupportsEmptyInserts || !HasIdentityNativeGenerator;
+
+
+		/// <summary>
+		/// Supports condition not bound to any data, like "where @p1 = @p2".
+		/// </summary>
+		public virtual bool SupportsNonDataBoundCondition => true;
+
+		public bool SupportsSqlType(SqlType sqlType)
+		{
+			try
+			{
+				_dialect.GetTypeName(sqlType);
+				return true;
+			}
+			catch
+			{
+				return false;
+			}
+		}
+
+		/// <summary>
+		/// Supports the modulo operator on decimal types
+		/// </summary>
+		public virtual bool SupportsModuloOnDecimal => true;
+
+		/// <summary>
+		/// Supports aggregating sub-selects in order by clause
+		/// </summary>
+		public virtual bool SupportsAggregatingScalarSubSelectsInOrderBy => _dialect.SupportsScalarSubSelects;
+
+		/// <summary>
+		/// Supports order by and limits/top in correlated sub-queries
+		/// </summary>
+		public virtual bool SupportsOrderByAndLimitInSubQueries => true;
+
+		/// <summary>
+		/// Supports selecting a double literal.
+		/// </summary>
+		public virtual bool SupportsSelectingDoubleLiteral => true;
+
+		/// <summary>
+		/// Supports foreign keys on composite keys including a boolean column.
+		/// </summary>
+		public virtual bool SupportsFKOnCompositeKeyWithBoolean => true;
+
+		/// <summary>
+		/// Supports tests involving concurrency.
+		/// </summary>
+		public virtual bool SupportsConcurrencyTests => true;
+
+		/// <summary>
+		/// Supports batching together inserts/updates/Delets among which some depends (auto foreign key) on others
+		/// in the batch.
+		/// </summary>
+		public virtual bool SupportsBatchingDependentDML => true;
+
+		/// <summary>
+		/// Some test editions of databases may have a simultaneous connections limits.
+		/// </summary>
+		public virtual int? MaxNumberOfConnections => null;
+
+		/// <summary>
+		/// Even quoted, some databases do not support square bracket in identifiers.
+		/// </summary>
+		public virtual bool SupportsSquareBracketInIdentifiers => true;
+
+		/// <summary>
+		/// Some databases fail when a connection is enlisted during the first phase of a two phase commit.
+		/// </summary>
+		public virtual bool SupportsUsingConnectionOnSystemTransactionPrepare => true;
+
+		/// <summary>
+		/// Some databases (provider?) fails to compute adequate column types for queries which columns
+		/// computing include a parameter value.
+		/// </summary>
+		/// <remarks>
+		/// This property is not set to true for Firebird although it seems to be affected too. But its driver
+		/// currently has a hack for casting all parameters in select and where clauses in order to explicit
+		/// their type in the query.
+		/// </remarks>
+		public virtual bool HasBrokenTypeInferenceOnSelectedParameters => false;
 	}
 }
