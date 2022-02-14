@@ -15,7 +15,6 @@
   </PropertyGroup>
   <ItemGroup>
     <None Remove="**\*.hbm.xml" />
-    <None Remove="NHibernate.DomainModel\**" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="**\*.hbm.xml" Exclude="bin\**\*.*" />
@@ -23,7 +22,6 @@
     <None Include="hibernate.cfg.xml">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <EmbeddedResource Remove="NHibernate.DomainModel\**" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NHibernate" Version="5.3.10" />
@@ -59,8 +57,5 @@
   </ItemGroup>
   <ItemGroup>
     <Service Include="{82a7f48d-3b50-4b1e-b82e-3ada8210c358}" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Remove="NHibernate.DomainModel\**" />
   </ItemGroup>
 </Project>
